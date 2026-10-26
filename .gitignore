@@ -1,0 +1,17 @@
+.env
+.env.*
+*.log
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+node_modules/
+data/
+private/
+*.sqlite*
+*.db
+storage-state*.json
+favorites-*.json
+.pytest_cache/
+dist/
+artifacts/
