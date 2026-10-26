@@ -1,0 +1,3 @@
+fastapi==0.119.1
+uvicorn==0.38.0
+pyxianyu @ git+https://github.com/DoLovya/pyxianyu.git@6d666037df8d007443c0d8a83df0b928b57d9a0b

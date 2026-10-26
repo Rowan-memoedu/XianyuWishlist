@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>收藏清单 · 闲鱼</title>
+  <link rel="stylesheet" href="/static/tokens.css">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <aside class="rail">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">✓</span><span>收藏清单<small>闲鱼 → 我的购买计划</small></span></div>
+    <nav aria-label="清单分类">
+      <button data-view="inbox" class="nav active"><span>待整理</span><b id="count-inbox">—</b></button>
+      <button data-view="queue" class="nav"><span>比价队列</span><b id="count-queue">—</b></button>
+      <button data-view="archive" class="nav"><span>已处理</span><b id="count-archive">—</b></button>
+    </nav>
+    <div class="rail-note"><strong>给收藏一个去向</strong><p>勾选加入比价，打叉移除。<br>点击同步后，统一取消对应的闲鱼收藏。</p><p>本地修改自动保存。</p></div>
+    <a class="export" href="/api/queue/export">导出比价队列 ↗</a>
+  </aside>
+  <main>
+    <header class="topbar"><div class="location">我的收藏 / <span id="crumb">待整理</span></div><div class="top-actions"><button id="refresh">读取收藏</button><button id="sync" class="primary">同步 <span id="pending-badge">0</span></button></div></header>
+    <section class="page-head"><div><p class="eyebrow">收藏整理</p><h1 id="heading">先留下真正想买的。</h1><p id="description">勾选商品进入比价队列；同步后，它会从闲鱼收藏中取消。</p></div><div class="summary"><strong id="summary-number">—</strong><span id="summary-label">件待整理</span></div></section>
+    <section class="sync-status" aria-live="polite"><span id="status-dot" class="status-dot" aria-hidden="true"></span><span id="sync-text">正在加载本地清单…</span><span id="read-time"></span></section>
+    <div class="toolbar"><label class="search-label" for="search">搜索清单<input id="search" type="search" placeholder="商品名称、备注或比价类型" autocomplete="off"></label><label for="filter">显示<select id="filter"><option value="all">全部商品</option><option value="pending">待同步</option><option value="invalid">已失效</option></select></label><span id="visible-count"></span></div>
+    <div id="notice" class="notice" hidden></div>
+    <section id="list" aria-label="商品清单" aria-busy="true"><div class="loading">正在读取本地保存的清单…</div></section>
+    <footer><span>已保存到本机 · 同步失败可重试</span><a href="https://www.goofish.com/collection" target="_blank" rel="noreferrer">打开闲鱼收藏 ↗</a></footer>
+  </main>
+  <dialog id="edit-dialog" aria-labelledby="edit-heading"><form id="edit-form"><div class="dialog-head"><h2 id="edit-heading">编辑商品</h2><button type="button" id="close-dialog" aria-label="关闭编辑">×</button></div><label for="edit-title" id="title-label">清单名称</label><input id="edit-title" required maxlength="1200"><div id="group-field"><label for="edit-group">比价类型</label><input id="edit-group" required list="group-options" maxlength="500"><datalist id="group-options"></datalist><p class="helper">相同类型会合并为一个任务；改成不同名称即可拆分。</p></div><label for="edit-notes" id="notes-label">购买要求 / 备注</label><textarea id="edit-notes" rows="4" maxlength="8000"></textarea><p id="edit-error" class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" id="cancel-edit">取消</button><button type="submit" class="primary">保存修改</button></div></form></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

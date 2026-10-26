@@ -1,0 +1,28 @@
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench · theme: Cobalt (local utility adaptation) · enrichment: none · nav: N3 · footer: Ft2
+   Knobs: visible text rail, compact working header, one-column inventory; first build.
+   Product scope overrides landing-page hero/demo and remote fonts. P:4 H:4 E:4 S:4 R:4 V:4 */
+:root {
+  --paper: oklch(98.5% .004 250);
+  --surface: oklch(100% 0 0);
+  --rail: oklch(96.6% .008 250);
+  --ink: oklch(25% .022 258);
+  --body: oklch(35% .018 257);
+  --muted: oklch(48% .018 257);
+  --rule: oklch(87% .014 250);
+  --accent: oklch(48% .19 256);
+  --accent-ink: oklch(100% 0 0);
+  --accent-soft: oklch(94% .03 256);
+  --focus: oklch(29% .07 256);
+  --danger: oklch(43% .15 26);
+  --danger-soft: oklch(97% .015 26);
+  --success: oklch(38% .08 156);
+  --backdrop: oklch(25% .022 258 / .35);
+  --font-body: 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif;
+  --font-display: 'Segoe UI', 'Microsoft YaHei UI', sans-serif;
+  --radius: 6px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --motion: 140ms ease-out;
+}
