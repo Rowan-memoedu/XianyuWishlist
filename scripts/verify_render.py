@@ -33,6 +33,7 @@ with sync_playwright() as p:
         assert measurement['rows'] == measurement['checkboxCount'] == expected, measurement
         assert not errors and not measurement['wrappedButtons'], measurement
         results.append(measurement)
+        print(json.dumps({'width':width,'rows':measurement['rows'],'overflow':False}), flush=True)
         page.close()
     browser.close()
 (out / 'report.json').write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding='utf-8')
