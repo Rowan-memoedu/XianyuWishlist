@@ -41,7 +41,7 @@ function row(item) {
   input.addEventListener('change',()=>action(item,input.checked?'queue':'undo'));check.append(input);article.append(check);
   const image=node('img','item-image');image.width=72;image.height=72;image.loading='lazy';image.referrerPolicy='no-referrer';image.alt='';
   let pic=item.image||''; if(pic.startsWith('//'))pic='https:'+pic;
-  try { const u=new URL(pic); if(u.protocol==='https:'&&/(^|\.)(alicdn\.com|tbcdn\.cn|goofish\.com)$/.test(u.hostname))image.src=u.href; } catch(_){}
+  try { const u=new URL(pic); if(/(^|\.)(alicdn\.com|tbcdn\.cn|goofish\.com)$/.test(u.hostname)&&['http:','https:'].includes(u.protocol)){u.protocol='https:';image.src=u.href;} } catch(_){}
   image.addEventListener('error',()=>image.removeAttribute('src'),{once:true});article.append(image);
   const main=node('div','item-main'), title=node('h3','item-title'),link=node('a','',item.display_title);
   link.href=item.url;link.target='_blank';link.rel='noreferrer';title.append(link);main.append(title);

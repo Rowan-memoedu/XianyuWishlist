@@ -18,6 +18,8 @@ with sync_playwright() as p:
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.goto('http://127.0.0.1:8766/', wait_until='domcontentloaded')
         page.locator('.item').first.wait_for(timeout=20000)
+        if width >= 768:
+            page.wait_for_function("() => {const i=document.querySelector('.item-image');return i&&i.complete}",timeout=20000)
         page.screenshot(path=str(out / f'inbox-{width}.png'))
         measurement = page.evaluate('''() => ({
           width:innerWidth, scrollWidth:document.documentElement.scrollWidth,
