@@ -186,7 +186,7 @@ def test_ambiguous_remote_failure_is_reconciled_by_readback(store):
 
 
 def test_api_security_persistence_and_export(tmp_path):
-    app = create_app(tmp_path)
+    app = create_app(tmp_path, lambda: FakeRemote([]))
     app.state.store.import_snapshot([item(1)], EVIDENCE)
     with TestClient(app) as client:
         state = client.get('/api/state').json()
