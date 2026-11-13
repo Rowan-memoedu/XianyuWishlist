@@ -159,6 +159,8 @@ def test_heartbeat_only_checks_read_connection_and_backs_off():
 
 def test_qr_confirmation_must_pass_remote_readback():
     class R:
+        def check_connection(self):
+            raise RemoteError('initial login expired', 'login_required')
         def begin_qr(self):
             return 'https://example.invalid/synthetic-qr'
         def poll_qr(self):
@@ -193,3 +195,126 @@ def test_missing_credentials_can_begin_login_but_cannot_read(tmp_path):
         r.check_connection()
     assert exc.value.code == 'login_required'
     r.close()
+
+
+@pytest.mark.parametrize('status', ['SCANED', 'SCANNED'])
+def test_platform_scanned_spellings_keep_waiting_for_confirmation(remote, status):
+    remote._qr = {'t': 'synthetic', 'ck': 'synthetic'}
+    remote._passport = lambda *args: SimpleNamespace(json=lambda: {
+        'content': {'success': True, 'data': {'qrCodeStatus': status}}})
+    assert remote.poll_qr() == 'SCANNED'
+    assert not remote.state_path.exists()
+
+
+def test_unknown_qr_status_is_a_protocol_failure_not_fabricated_security_verification(remote):
+    remote._qr = {'t': 'synthetic', 'ck': 'synthetic'}
+    remote._passport = lambda *args: SimpleNamespace(json=lambda: {
+        'content': {'success': True, 'data': {'qrCodeStatus': 'CHANGED_PROTOCOL'}}})
+    with pytest.raises(RemoteError) as exc:
+        remote.poll_qr()
+    assert exc.value.code == 'login_protocol_error'
+
+
+def test_confirmed_qr_with_verification_redirect_is_not_reported_connected(remote):
+    remote._qr = {'t': 'synthetic', 'ck': 'synthetic'}
+    remote._passport = lambda *args: SimpleNamespace(json=lambda: {
+        'content': {'success': True, 'data': {'qrCodeStatus': 'CONFIRMED', 'iframeRedirect': True}}})
+    with pytest.raises(RemoteError) as exc:
+        remote.poll_qr()
+    assert exc.value.code == 'verification_required'
+    assert not remote.state_path.exists()
+
+
+def test_expired_snapshot_recovers_from_browser_and_persists_it(remote):
+    reads = []
+    remote.browser_provider = lambda: reads.append(True) or [
+        dict(name='unb', value='synthetic-account', domain='.goofish.com'),
+        dict(name='cookie2', value='fresh-browser-session', domain='.goofish.com')]
+    calls = []
+    def request(*args):
+        calls.append(True)
+        if len(calls) == 1:
+            return {'ret': ['FAIL_SYS_SESSION_EXPIRED']}
+        assert remote.client.get_cookie_value('cookie2') == 'fresh-browser-session'
+        return {'ret': ['SUCCESS::ok'], 'data': {'items': []}}
+    remote._request_once = request
+    remote._renew = lambda: pytest.fail('browser reuse must precede another login attempt')
+    assert remote.check_connection()
+    assert len(reads) == 1
+    assert json.loads(remote.state_path.read_text())['credential_source'] == 'chrome'
+
+
+def test_browser_account_mismatch_never_reaches_a_write_or_persistence(remote):
+    remote.browser_provider = lambda: [dict(name='unb', value='other-person', domain='.goofish.com')]
+    remote._request_once = lambda *args: {'ret': ['FAIL_SYS_SESSION_EXPIRED']}
+    with pytest.raises(RemoteError) as exc:
+        remote.unfavorite('123')
+    assert exc.value.code == 'account_mismatch'
+    assert not remote.state_path.exists()
+
+
+def test_failed_browser_recovery_is_attempted_once_per_call(remote):
+    reads = []
+    remote.browser_provider = lambda: reads.append(True) or [dict(name='unb', value='synthetic-account', domain='.goofish.com')]
+    remote._request_once = lambda *args: {'ret': ['FAIL_SYS_SESSION_EXPIRED']}
+    remote._renew = lambda: None
+    with pytest.raises(RemoteError):
+        remote.check_connection()
+    assert len(reads) == 1
+
+
+def test_reconnect_prefers_available_browser_session_without_qr():
+    calls = []
+    class R:
+        credential_source = 'chrome'
+        def check_connection(self):
+            calls.append('readback')
+        def begin_qr(self):
+            pytest.fail('Existing browser login should not ask for a QR')
+        def close(self):
+            calls.append('close')
+    c = Connection(R, threading.Lock())
+    c._login()
+    assert calls == ['readback', 'close']
+    assert c.snapshot()['state'] == 'connected'
+    assert c.snapshot()['credential_source'] == 'chrome'
+
+
+def test_transient_network_failure_does_not_prompt_another_qr():
+    class R:
+        def check_connection(self):
+            raise RemoteError('temporary network failure')
+        def begin_qr(self):
+            pytest.fail('Network failures should retry instead of requesting a login')
+        def close(self):
+            pass
+    c = Connection(R, threading.Lock())
+    c._login()
+    assert c.snapshot()['state'] == 'retrying'
+
+
+def test_browser_pipe_uses_environment_credentials_without_command_line_or_logs(monkeypatch):
+    from wishlist.browser_session import BrowserSession
+    import wishlist.browser_session as transport
+    monkeypatch.setenv('PLAYWRIGHT_MCP_EXTENSION_TOKEN', 'synthetic-local-credential')
+    calls = []
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(stdout=json.dumps({'ok': True, 'cookies': [
+            {'name': 'unb', 'value': 'synthetic', 'domain': '.goofish.com'}]}).encode())
+    monkeypatch.setattr(transport.subprocess, 'run', run)
+    assert BrowserSession().read()[0]['name'] == 'unb'
+    assert 'synthetic-local-credential' not in str(calls[0][0])
+    assert calls[0][1]['stderr'] == transport.subprocess.DEVNULL
+
+
+def test_browser_pipe_errors_do_not_expose_raw_output(monkeypatch):
+    from wishlist.browser_session import BrowserSession
+    import wishlist.browser_session as transport
+    monkeypatch.setenv('PLAYWRIGHT_MCP_EXTENSION_TOKEN', 'synthetic-local-credential')
+    monkeypatch.setattr(transport.subprocess, 'run', lambda *args, **kwargs:
+        SimpleNamespace(stdout=b'private-cookie-value-invalid-json'))
+    with pytest.raises(RemoteError) as exc:
+        BrowserSession().read()
+    assert 'private-cookie-value' not in str(exc.value)
+    assert exc.value.code == 'browser_unavailable'

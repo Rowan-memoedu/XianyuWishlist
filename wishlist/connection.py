@@ -36,12 +36,12 @@ class Connection:
         with self.guard:
             self.value.update(values)
 
-    def connected(self):
+    def connected(self, source=None):
         self.failures = 0
         self.next_check = time.time() + self.interval
-        self.update(state='connected', message='闲鱼已连接，后台自动维护登录态',
+        self.update(state='connected', message='已复用 Chrome 登录态连接闲鱼，后台自动维护会话' if source == 'chrome' else '闲鱼已连接，后台自动维护登录态',
             checked_at=now(), last_success_at=now(), next_check_at=self.next_check,
-            qr_image=None, expires_at=0)
+            qr_image=None, expires_at=0, credential_source=source)
 
     def failed(self, exc):
         code = exc.code if isinstance(exc, RemoteError) else 'connection_error'
@@ -61,7 +61,7 @@ class Connection:
             self.update(state='checking', message='正在检查并续期闲鱼登录态')
             remote = self.factory()
             remote.check_connection()
-            self.connected()
+            self.connected(getattr(remote, 'credential_source', None))
         except Exception as exc:
             self.failed(exc)
         finally:
@@ -86,8 +86,17 @@ class Connection:
         try:
             if not acquired:
                 raise RemoteError('收藏同步正在进行，请完成后再重新连接')
-            self.update(state='connecting', message='正在获取闲鱼登录二维码', qr_image=None)
+            self.update(state='connecting', message='正在检查 Chrome 与已有闲鱼登录态', qr_image=None)
             remote = self.factory()
+            # Prefer the existing Chrome login or the maintained saved session before QR.
+            try:
+                remote.check_connection()
+                self.connected(getattr(remote, 'credential_source', None))
+                return
+            except RemoteError as exc:
+                if exc.code not in ('login_required', 'verification_required'):
+                    raise
+            self.update(message='正在获取闲鱼登录二维码')
             code = remote.begin_qr()
             stream = io.BytesIO()
             qrcode.make(code, image_factory=qrcode.image.svg.SvgPathFillImage).save(stream)
@@ -98,7 +107,7 @@ class Connection:
             while not self.stop.wait(3) and time.time() < expires:
                 status = remote.poll_qr()
                 if status == 'CONFIRMED':
-                    self.connected()
+                    self.connected(getattr(remote, 'credential_source', None))
                     return
                 if status in ('EXPIRED', 'CANCELED'):
                     break

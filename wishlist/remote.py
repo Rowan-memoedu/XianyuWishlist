@@ -25,9 +25,10 @@ class RemoteError(Exception):
 
 
 class FavoritesRemote:
-    def __init__(self, state_path, delay=2, seed_path=None, expected_account=None):
+    def __init__(self, state_path, delay=2, seed_path=None, expected_account=None, browser_provider=None):
         self.delay = delay
         self.state_path = Path(state_path)
+        self.browser_provider = browser_provider
         try:
             self._revision = self.state_path.read_bytes() if self.state_path.exists() else None
             state = json.loads(self._revision or Path(seed_path or state_path).read_bytes())
@@ -36,6 +37,7 @@ class FavoritesRemote:
         except (OSError, ValueError):
             raise RemoteError('本机登录态不可读，请恢复登录态文件后重试', 'login_required') from None
         self.client = XianyuClient({}, 'wishlist-local')
+        self.credential_source = state.get('credential_source', 'saved')
         for c in state.get('cookies', []):
             domain = c.get('domain', '').lstrip('.')
             if domain == 'goofish.com' or domain.endswith('.goofish.com'):
@@ -83,7 +85,7 @@ class FavoritesRemote:
             cookies.append(dict(name=c.name, value=c.value, domain=c.domain, path=c.path,
                 expires=c.expires if c.expires is not None else -1, secure=c.secure,
                 httpOnly=bool(c.has_nonstandard_attr('HttpOnly')), sameSite='Lax'))
-        raw = json.dumps({'cookies': cookies, 'origins': []}, ensure_ascii=False).encode('utf-8')
+        raw = json.dumps({'cookies': cookies, 'origins': [], 'credential_source': self.credential_source}, ensure_ascii=False).encode('utf-8')
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         fd, temp = tempfile.mkstemp(dir=self.state_path.parent, suffix='.tmp')
         try:
@@ -130,6 +132,30 @@ class FavoritesRemote:
             raise RemoteError('闲鱼登录已过期或需要验证，请扫码重新连接', 'login_required')
         self._check_account()
 
+    def _reuse_browser(self):
+        if not self.browser_provider:
+            return False
+        try:
+            cookies = self.browser_provider()
+        except RemoteError as exc:
+            if exc.code == 'browser_unavailable':
+                return False
+            raise
+        # Replace the jar as one candidate, never mix accounts or persist before API success.
+        from requests.cookies import RequestsCookieJar
+        jar = RequestsCookieJar()
+        for c in cookies:
+            domain = c.get('domain', '').lstrip('.')
+            if domain != 'goofish.com' and not domain.endswith('.goofish.com'):
+                continue
+            jar.set(c['name'], c['value'], domain=c['domain'], path=c.get('path', '/'),
+                expires=c['expires'] if c.get('expires', -1) > 0 else None,
+                secure=c.get('secure', True), rest={'HttpOnly': None} if c.get('httpOnly') else {})
+        self.client.session.cookies = jar
+        self._check_account()
+        self.credential_source = 'chrome'
+        return True
+
     def begin_qr(self):
         self._passport('GET', '/mini_login.htm')
         try:
@@ -148,7 +174,14 @@ class FavoritesRemote:
                 {**self._passport_params(), **self._qr}).json()['content']
             data = content['data']
             status = data.get('qrCodeStatus')
+            # The platform uses SCANED (one N); accept the standard spelling too.
+            if status == 'SCANED':
+                status = 'SCANNED'
+            if status == 'CANCELLED':
+                status = 'CANCELED'
             if status == 'CONFIRMED':
+                if data.get('iframeRedirect'):
+                    raise RemoteError('闲鱼要求安全验证，请在已登录的 Chrome 中完成验证后检查连接', 'verification_required')
                 token = data.get('token') or data.get('lgToken')
                 if token:
                     # Fixed endpoint; login tokens never enter the page or logs.
@@ -159,7 +192,7 @@ class FavoritesRemote:
                 self._check_account()
                 self.check_connection()
             elif status not in ('NEW', 'SCANNED', 'EXPIRED', 'CANCELED'):
-                raise ValueError()
+                raise RemoteError('扫码接口返回了未识别的状态，请检查浏览器连接后重试', 'login_protocol_error')
             return status
         except (KeyError, TypeError, ValueError):
             raise RemoteError('扫码需要在闲鱼中完成验证，请重新连接', 'login_required') from None
@@ -171,8 +204,11 @@ class FavoritesRemote:
         return True
 
     def _call(self, api, data):
+        browser_tried = False
         if not self.account_hash:
-            raise RemoteError('请扫码连接闲鱼账号', 'login_required')
+            browser_tried = True
+            if not self._reuse_browser():
+                raise RemoteError('请在 Chrome 登录闲鱼后检查连接，或扫码连接原账号', 'login_required')
         renewed = False
         for attempt in range(4):
             payload = self._request_once(api, data)
@@ -181,6 +217,10 @@ class FavoritesRemote:
                 self._persist()
                 return payload.get('data', {})
             code = str(codes[0]).split('::')[0] if codes else 'INVALID_RESPONSE'
+            if (code == 'FAIL_SYS_SESSION_EXPIRED' or code.startswith(('FAIL_SYS_USER_VALIDATE', 'RGV587', 'FAIL_SYS_ILLEGAL_ACCESS'))) and not browser_tried and attempt < 3:
+                browser_tried = True
+                if self._reuse_browser():
+                    continue
             if code in TOKEN_ERRORS and attempt < 3:
                 # requests has already merged Set-Cookie; regenerate the signature.
                 continue

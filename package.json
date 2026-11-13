@@ -1,0 +1,8 @@
+{
+  "name": "xianyu-wishlist-browser-session",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {"test": "node --test scripts/browser-session.test.cjs"},
+  "dependencies": {"playwright-core": "1.63.0"},
+  "engines": {"node": ">=24"}
+}

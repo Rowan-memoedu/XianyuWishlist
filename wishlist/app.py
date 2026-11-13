@@ -13,6 +13,7 @@ from .remote import FavoritesRemote, RemoteError
 from .store import Store, now
 from .sync import sync_once
 from .connection import Connection
+from .browser_session import BrowserSession
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -44,9 +45,10 @@ def create_app(data_dir=None, remote_factory=None):
     lock = threading.Lock()
     job = {'running': False, 'message': '尚未同步', 'error': None}
     state_path = os.environ.get('WISHLIST_LOGIN_STATE', str(data_dir / 'login-state.json'))
+    browser = BrowserSession()
     factory = remote_factory or (lambda: FavoritesRemote(state_path,
         seed_path='D:/AppData/XianyuHunterTrial/private/storage-state.json',
-        expected_account=store.meta('account_hash')))
+        expected_account=store.meta('account_hash'), browser_provider=browser.read))
     connection = Connection(factory, lock)
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None,
         lifespan=connection.lifespan if remote_factory is None else None)
@@ -152,7 +154,7 @@ def create_app(data_dir=None, remote_factory=None):
                 store.backup(data_dir / 'before-sync.sqlite3')
                 remote = factory()
                 result = sync_once(store, remote, body.submit, lambda message: job.update(message=message))
-                connection.connected()
+                connection.connected(getattr(remote, 'credential_source', None))
                 job.update(message=result['message'], result=result)
             except Exception as exc:
                 safe = str(exc) if isinstance(exc, (ValueError, RemoteError)) else '同步发生异常，本地操作已保留'
