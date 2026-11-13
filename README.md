@@ -22,6 +22,10 @@
 
 决策工作台的闲鱼页显示当前连接、最近成功时间及扫码重连入口。用原闲鱼账号扫码并在手机确认后，必须通过真实收藏接口读取才能显示已连接；其他账号不能替换既有清单绑定。平台强制登录或安全验证仍需本人完成，保活不能保证账号永久免验证。保活与扫码均不会取消收藏、购买或发送消息。
 
+优先复用 Chrome 的现有登录：保存的会话失效时，通过已安装的微软官方 Playwright 扩展读取当前 Chrome Default 资料中的闲鱼 Cookie，核对原账号并通过收藏接口验证后，再保存为本应用会话。凭据只经过本机进程管道，不进入日志、前端或服务器。已保存的会话可在 Chrome 关闭后继续使用；需要重新借用浏览器会话时，Chrome 须已打开并登录原账号。服务不会启动或重启 Chrome，不自动安装扩展，也不读取其他站点的返回结果。
+
+浏览器接入复用 Windows 用户环境中的 `PLAYWRIGHT_MCP_EXTENSION_TOKEN`，当前进程变量可覆盖；没有该凭据或扩展时沿用保存的会话和扫码入口。官方接入说明见 [Playwright Chrome Extension](https://github.com/microsoft/playwright/tree/main/packages/extension#readme)。扫码兼容平台实际使用的 `SCANED` 状态，并将未识别协议状态与真实安全验证分别提示。
+
 ## 安装与运行
 
 使用 Python 3.14 / PowerShell 7，依赖写入 D 盘运行环境：
@@ -33,6 +37,7 @@ $env:TMP = $env:TEMP
 New-Item -ItemType Directory -Path $env:TEMP -Force | Out-Null
 python -m venv 'D:\AppData\XianyuWishlist\venv'
 & 'D:\AppData\XianyuWishlist\venv\Scripts\python.exe' -m pip install -r requirements.txt
+npm ci --ignore-scripts --cache D:/Caches/npm
 pwsh -NoProfile -File .\Start-Wishlist.ps1
 ```
 
@@ -47,6 +52,7 @@ pwsh -NoProfile -File .\Start-Wishlist.ps1
 ```powershell
 & 'D:\AppData\XianyuWishlist\venv\Scripts\python.exe' -m pip install -r requirements-dev.txt
 & 'D:\AppData\XianyuWishlist\venv\Scripts\python.exe' -m pytest -q
+npm test
 ```
 
 测试使用隔离数据库和模拟远端，覆盖事务持久化、自动合并、编辑保护、排除记录、已购、分页重复/不完整拒绝、失败重试、响应成功但远端未取消、账号不一致与本机接口保护。`tests.fixture_server:create_fixture` 供浏览器验收使用，无法连接闲鱼。`scripts/verify_render.py` 仅做本机只读截图，需另装 Playwright 并使用已安装的 Chrome。
