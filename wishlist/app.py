@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from .remote import FavoritesRemote, RemoteError
 from .store import Store, now
 from .sync import sync_once
+from .connection import Connection
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -42,11 +43,16 @@ def create_app(data_dir=None, remote_factory=None):
     csrf = secrets.token_urlsafe(32)
     lock = threading.Lock()
     job = {'running': False, 'message': '尚未同步', 'error': None}
-    state_path = os.environ.get('WISHLIST_LOGIN_STATE', 'D:/AppData/XianyuHunterTrial/private/storage-state.json')
-    factory = remote_factory or (lambda: FavoritesRemote(state_path))
-    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    state_path = os.environ.get('WISHLIST_LOGIN_STATE', str(data_dir / 'login-state.json'))
+    factory = remote_factory or (lambda: FavoritesRemote(state_path,
+        seed_path='D:/AppData/XianyuHunterTrial/private/storage-state.json',
+        expected_account=store.meta('account_hash')))
+    connection = Connection(factory, lock)
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None,
+        lifespan=connection.lifespan if remote_factory is None else None)
     app.state.store = store
     app.state.job = job
+    app.state.connection = connection
 
     @app.middleware('http')
     async def local_only(request: Request, call_next):
@@ -86,7 +92,21 @@ def create_app(data_dir=None, remote_factory=None):
 
     @app.get('/api/state')
     def state():
-        return dict(store.snapshot(), csrf=csrf, job=dict(job))
+        status = connection.snapshot()
+        visible_job = dict(job)
+        if status['state'] == 'connected' and visible_job['error'] and not visible_job['running']:
+            visible_job.update(error=None, message='连接已恢复，可重新读取最新收藏')
+        return dict(store.snapshot(), csrf=csrf, job=visible_job, connection=status)
+
+    @app.post('/api/connection/check')
+    def check_connection():
+        connection.request_check()
+        return {'ok': True}
+
+    @app.post('/api/connection/login')
+    def login_connection():
+        connection.start_login()
+        return {'ok': True}
 
     @app.post('/api/items/{item_id}/edit')
     def edit_item(item_id: str, body: EditItem):
@@ -132,10 +152,12 @@ def create_app(data_dir=None, remote_factory=None):
                 store.backup(data_dir / 'before-sync.sqlite3')
                 remote = factory()
                 result = sync_once(store, remote, body.submit, lambda message: job.update(message=message))
+                connection.connected()
                 job.update(message=result['message'], result=result)
             except Exception as exc:
                 safe = str(exc) if isinstance(exc, (ValueError, RemoteError)) else '同步发生异常，本地操作已保留'
                 job.update(error=safe, message='同步未完成')
+                connection.failed(exc)
             finally:
                 if remote:
                     remote.close()
