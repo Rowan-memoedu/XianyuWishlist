@@ -145,16 +145,108 @@ def test_heartbeat_only_checks_read_connection_and_backs_off():
     c.check()
     assert calls == ['read', 'close']
     assert c.snapshot()['state'] == 'connected'
-    assert c.next_check > time.time() + 590
+    assert time.time() + 21590 < c.next_check <= time.time() + 21600
     with lock:
         c.check()
     assert len(calls) == 2
     c.failed(RemoteError('temporary'))
     first = c.next_check
     c.failed(RemoteError('temporary'))
-    assert c.next_check > first + 20
+    assert c.next_check > first + 1790
     c.failed(RemoteError('scan required', 'login_required'))
-    assert c.next_check > time.time() + 3500
+    assert c.next_check is None
+    assert c.snapshot()['automatic'] is False
+
+
+@pytest.mark.parametrize('code', ['login_required', 'verification_required', 'account_mismatch'])
+def test_login_failures_stay_paused_until_user_requests_check(monkeypatch, code):
+    clock = [0]
+    calls = []
+    class R:
+        def check_connection(self):
+            calls.append(clock[0])
+            raise RemoteError('manual reconnect required', code)
+        def close(self):
+            pass
+    class Stop:
+        def is_set(self):
+            return clock[0] >= 48 * 3600
+        def wait(self, _):
+            clock[0] += 3600
+    monkeypatch.setattr('wishlist.connection.time.time', lambda: clock[0])
+    c = Connection(R, threading.Lock())
+    c.stop = Stop()
+    c._maintain()
+    assert calls == [0]  # Two days passing cannot reopen a login attempt.
+    assert c.snapshot()['next_check_at'] is None
+    c.request_check()
+    assert c.next_check == 0
+    c.check()
+    assert calls == [0, 48 * 3600]
+
+
+def test_network_retry_spacing_is_bounded_and_success_restores_schedule(monkeypatch):
+    monkeypatch.setattr('wishlist.connection.time.time', lambda: 100)
+    c = Connection(lambda: None, threading.Lock())
+    delays = []
+    for _ in range(8):
+        c.failed(RemoteError('network unavailable'))
+        delays.append(c.next_check - 100)
+    assert delays == [1800, 3600, 7200, 14400, 21600, 21600, 21600, 21600]
+    c.failed(RemoteError('expired', 'login_required'))
+    c.connected()
+    assert c.snapshot()['automatic'] is True
+    assert c.next_check == 21700
+
+
+def test_production_routes_keep_browser_access_exclusive_to_explicit_reconnect(tmp_path, monkeypatch):
+    from wishlist.browser_session import BrowserSession
+    session = tmp_path / 'login-state.json'
+    session.write_text(json.dumps({'cookies': [
+        dict(name='unb', value='synthetic-account', domain='.goofish.com'),
+        dict(name='cookie2', value='expired', domain='.goofish.com')]}))
+    monkeypatch.setenv('WISHLIST_LOGIN_STATE', str(session))
+    browser_reads = []
+    def read_browser(_):
+        browser_reads.append(True)
+        return [dict(name='unb', value='synthetic-account', domain='.goofish.com'),
+                dict(name='cookie2', value='fresh', domain='.goofish.com')]
+    monkeypatch.setattr(BrowserSession, 'read', read_browser)
+    def request(remote, *_):
+        if remote.client.get_cookie_value('cookie2') == 'fresh':
+            return {'ret': ['SUCCESS::ok'], 'data': {'items': []}}
+        return {'ret': ['FAIL_SYS_SESSION_EXPIRED']}
+    monkeypatch.setattr(FavoritesRemote, '_request_once', request)
+    def expired(_):
+        raise RemoteError('expired saved session', 'login_required')
+    monkeypatch.setattr(FavoritesRemote, '_renew', expired)
+    app = create_app(tmp_path)
+    c = app.state.connection
+    # Use the real production factories with expired credentials and no lifespan thread.
+    c.check()
+    assert c.snapshot()['state'] == 'login_required'
+    assert browser_reads == []
+    client = TestClient(app)
+    token = {'x-wishlist-token': client.get('/api/state').json()['csrf']}
+    for submit in (False, True):
+        assert client.post('/api/sync', headers=token, json={'submit': submit}).status_code == 200
+        assert c.lock.acquire(timeout=5)
+        c.lock.release()
+        assert app.state.job['running'] is False
+        assert app.state.job['error']
+        assert browser_reads == []
+    assert client.post('/api/connection/check', headers=token).status_code == 200
+    c.check()
+    assert browser_reads == []
+    assert client.post('/api/connection/login', headers=token).status_code == 200
+    c.login_thread.join(timeout=5)
+    assert not c.login_thread.is_alive()
+    assert browser_reads == [True]
+    assert c.snapshot()['state'] == 'connected'
+    assert c.next_check > time.time() + 21590
+    c.check()
+    assert browser_reads == [True]  # Persisted credentials need no new extension connection.
+    client.close()
 
 
 def test_qr_confirmation_must_pass_remote_readback():

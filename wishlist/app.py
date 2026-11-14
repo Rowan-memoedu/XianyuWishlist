@@ -46,10 +46,16 @@ def create_app(data_dir=None, remote_factory=None):
     job = {'running': False, 'message': '尚未同步', 'error': None}
     state_path = os.environ.get('WISHLIST_LOGIN_STATE', str(data_dir / 'login-state.json'))
     browser = BrowserSession()
-    factory = remote_factory or (lambda: FavoritesRemote(state_path,
-        seed_path='D:/AppData/XianyuHunterTrial/private/storage-state.json',
-        expected_account=store.meta('account_hash'), browser_provider=browser.read))
-    connection = Connection(factory, lock)
+    def default_factory(*, allow_browser=False):
+        return FavoritesRemote(state_path,
+            seed_path='D:/AppData/XianyuHunterTrial/private/storage-state.json',
+            expected_account=store.meta('account_hash'),
+            browser_provider=browser.read if allow_browser else None)
+
+    # Extension connections can create a visible tab. Only explicit reconnect may use one.
+    factory = remote_factory or default_factory
+    login_factory = remote_factory or (lambda: default_factory(allow_browser=True))
+    connection = Connection(factory, lock, login_factory=login_factory)
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None,
         lifespan=connection.lifespan if remote_factory is None else None)
     app.state.store = store
