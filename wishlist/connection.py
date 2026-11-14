@@ -13,15 +13,17 @@ from .store import now
 
 
 class Connection:
-    def __init__(self, factory, operation_lock, interval=600):
+    def __init__(self, factory, operation_lock, interval=21600, login_factory=None):
         self.factory, self.lock, self.interval = factory, operation_lock, interval
+        self.login_factory = login_factory or factory
         self.stop = threading.Event()
         self.guard = threading.Lock()
         self.thread = None
         self.login_thread = None
         self.login_active = False
         self.value = dict(state='checking', message='正在检查闲鱼连接', checked_at=None,
-            last_success_at=None, next_check_at=None, automatic=True)
+            last_success_at=None, next_check_at=None, automatic=True,
+            check_interval_seconds=interval, browser_reuse='manual_only')
         self.next_check = 0
         self.failures = 0
 
@@ -41,17 +43,18 @@ class Connection:
         self.next_check = time.time() + self.interval
         self.update(state='connected', message='已复用 Chrome 登录态连接闲鱼，后台自动维护会话' if source == 'chrome' else '闲鱼已连接，后台自动维护登录态',
             checked_at=now(), last_success_at=now(), next_check_at=self.next_check,
-            qr_image=None, expires_at=0, credential_source=source)
+            qr_image=None, expires_at=0, credential_source=source, automatic=True)
 
     def failed(self, exc):
         code = exc.code if isinstance(exc, RemoteError) else 'connection_error'
         needs_login = code in ('login_required', 'verification_required', 'account_mismatch')
         self.failures += 1
-        delay = 3600 if needs_login else min(30 * 2 ** min(self.failures - 1, 5), 600)
-        self.next_check = time.time() + delay
+        delay = min(1800 * 2 ** min(self.failures - 1, 4), self.interval)
+        self.next_check = None if needs_login else time.time() + delay
         self.update(state=code if needs_login else 'retrying',
             message=str(exc) if isinstance(exc, RemoteError) else '连接暂时中断，将自动重试；本地记录已保留',
-            checked_at=now(), next_check_at=self.next_check, qr_image=None, expires_at=0)
+            checked_at=now(), next_check_at=self.next_check, automatic=not needs_login,
+            qr_image=None, expires_at=0)
 
     def check(self):
         if self.login_active or not self.lock.acquire(blocking=False):
@@ -70,6 +73,7 @@ class Connection:
             self.lock.release()
 
     def request_check(self):
+        self.update(automatic=True)
         self.next_check = 0
 
     def start_login(self):
@@ -87,7 +91,7 @@ class Connection:
             if not acquired:
                 raise RemoteError('收藏同步正在进行，请完成后再重新连接')
             self.update(state='connecting', message='正在检查 Chrome 与已有闲鱼登录态', qr_image=None)
-            remote = self.factory()
+            remote = self.login_factory()
             # Prefer the existing Chrome login or the maintained saved session before QR.
             try:
                 remote.check_connection()
@@ -126,7 +130,7 @@ class Connection:
 
     def _maintain(self):
         while not self.stop.is_set():
-            if time.time() >= self.next_check:
+            if self.next_check is not None and time.time() >= self.next_check:
                 self.check()
             self.stop.wait(1)
 
